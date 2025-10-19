@@ -81,20 +81,20 @@ def home():
 def login(data: LoginIn, db: Session = Depends(get_db)):
     # Walidacja loginu (4 litery)
     if not re.fullmatch(r"[A-Za-z]{4}", data.login):
-        return {"error": "Login musi zawierać dokładnie 4 litery"}
+        raise HTTPException(status_code=422, detail="Login musi zawierać dokładnie 4 litery")
 
     # Walidacja hasła (6 cyfr)
     if not re.fullmatch(r"\d{6}", data.haslo):
-        return {"error": "Hasło musi zawierać dokładnie 6 cyfr"}
+        raise HTTPException(status_code=422, detail="Hasło musi zawierać dokładnie 6 cyfr")
 
     # Szukanie użytkownika
     pracownik = db.query(models.Pracownik).filter_by(login=data.login).first()
     if not pracownik:
-        return {"error": "Nie znaleziono użytkownika"}
+        raise HTTPException(status_code=404, detail="Nie znaleziono użytkownika")
 
     # (UWAGA: teraz zapisujemy hasło jawnie, ale w przyszłości warto zrobić hash)
     if pracownik.haslo_hash != data.haslo:
-        return {"error": "Błędne hasło"}
+        raise HTTPException(status_code=401, detail="Błędne hasło")
 
     return {
         "status": "zalogowano",
