@@ -39,6 +39,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+class StatusChangeIn(BaseModel):
+    id_pracownika: int
+    status: StatusObecnosciEnum
+
 # --- DB sesja ---
 def get_db():
     db = SessionLocal()
@@ -345,7 +349,9 @@ def stop_meldunku(id_pracownika: int, ilosc_ok: int, ilosc_nok: int, db: Session
 # =======================
 
 @app.post("/status/zmiana")
-def zmiana_statusu(id_pracownika: int, status: StatusObecnosciEnum, db: Session = Depends(get_db)):
+def zmiana_statusu(payload: StatusChangeIn, db: Session = Depends(get_db)):
+    id_pracownika = payload.id_pracownika
+    status = payload.status
     # Zamknij poprzedni status
     ostatni_status = (
         db.query(models.Obecnosc)
