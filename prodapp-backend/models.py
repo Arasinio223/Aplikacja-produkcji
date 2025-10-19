@@ -8,8 +8,6 @@ from sqlalchemy import ForeignKey
 import enum
 from sqlalchemy import Enum
 
-Base = declarative_base()
-
 class Pracownik(Base):
     __tablename__ = "pracownicy"
     id_pracownika = Column(Integer, primary_key=True, index=True)
@@ -38,17 +36,18 @@ class Zlecenie(Base):
     meldunki = relationship("Meldunek", back_populates="zlecenie")
 
 class StatusObecnosciEnum(str, enum.Enum):
-    PRACA_NORMALNA = "praca_normalna"
-    SZATNIA = "szatnia"
-    PALARNIA = "palarnia"
-    WYJSCIE_SLUZBOWE = "wyjscie_sluzbowe"
-    WYJSCIE_PRYWATNE = "wyjscie_prywatne"
-    PRZERWA = "przerwa"
-    PRZERWA_PAPIEROS = "przerwa_papieros"
-    AWARIA = "awaria"
-    PRACA_ZDALNA = "praca_zdalna"
+    PRACA = "praca"
+    PRZEZBROJENIE_MASZYNY = "przezbrojenie_maszyny"
     SZKOLENIE = "szkolenie"
-    OCZEKIWANIE_MATERIALY = "oczekiwanie_materialy"
+    SPRZATANIE_STANOWISKA = "sprzatanie_stanowiska"
+    PRZERWA = "przerwa"
+    PALARNIA = "palarnia"
+    SZATNIA = "szatnia"
+    AWARIA = "awaria"
+    OCZEKIWANIE_NA_MATERIAL = "oczekiwanie_na_material"
+    SPOTKANIE = "spotkanie"
+    PRACA_ZDALNA = "praca_zdalna"
+    WYJSCIE_Z_PRACY = "wyjscie_z_pracy"
 
 class Obecnosc(Base):
     __tablename__ = "obecnosci"
@@ -56,7 +55,7 @@ class Obecnosc(Base):
     id_pracownika = Column(Integer, ForeignKey("pracownicy.id_pracownika"), nullable=False)
     czas_start = Column(DateTime(timezone=True), server_default=func.now())
     czas_stop = Column(DateTime(timezone=True), nullable=True)
-    status = Column(Enum(StatusObecnosciEnum), nullable=False, default=StatusObecnosciEnum.PRACA_NORMALNA)
+    status = Column(Enum(StatusObecnosciEnum), nullable=False, default=StatusObecnosciEnum.SZATNIA)
     id_zlecenia = Column(Integer, ForeignKey("zlecenia.id_zlecenia"), nullable=True)  # Dodaj to pole
 
     pracownik = relationship("Pracownik", back_populates="obecnosci")

@@ -251,7 +251,7 @@ def start_obecnosci(id_pracownika: int, db: Session = Depends(get_db)):
 
     nowa = models.Obecnosc(
         id_pracownika=id_pracownika,
-        czas_start=datetime.utcnow()
+        czas_start=datetime.now(timezone.utc)
     )
     db.add(nowa)
     db.commit()
@@ -268,7 +268,7 @@ def stop_obecnosci(id_pracownika: int, db: Session = Depends(get_db)):
     if not aktywna:
         return {"error": "Brak aktywnej obecności do zakończenia"}
 
-    aktywna.czas_stop = datetime.utcnow()
+    aktywna.czas_stop = datetime.now(timezone.utc)
     db.commit()
     db.refresh(aktywna)
 
@@ -344,49 +344,47 @@ def stop_meldunku(id_pracownika: int, ilosc_ok: int, ilosc_nok: int, db: Session
         "ilosc_ok": aktywny.ilosc_ok,
         "ilosc_nok": aktywny.ilosc_nok
     }
-# =======================
-# STATUSY OBECNOŚCI
-# =======================
 
-@app.post("/status/zmiana")
-def zmiana_statusu(payload: StatusChangeIn, db: Session = Depends(get_db)):
+
+@app.post("/pracownicy/zmien-status")
+def zmien_status(payload: StatusChangeIn, db: Session = Depends(get_db)):
+    """
+    Zmienia status pracownika.
+    - Pierwszy status danego dnia rozpoczyna obecność.
+    - Każda zmiana zamyka poprzedni status i otwiera nowy.
+    - Status 'wyjscie_z_pracy' kończy dzień pracy.
+    """
     id_pracownika = payload.id_pracownika
-    status = payload.status
-    # Zamknij poprzedni status
+    nowy_status_val = payload.status
+
+    # Znajdź ostatni aktywny status pracownika
     ostatni_status = (
         db.query(models.Obecnosc)
         .filter(models.Obecnosc.id_pracownika == id_pracownika, models.Obecnosc.czas_stop == None)
+        .order_by(models.Obecnosc.czas_start.desc())
         .first()
     )
+
+    # Jeśli jest aktywny status, zamknij go
     if ostatni_status:
-        ostatni_status.czas_stop = datetime.utcnow()
+        ostatni_status.czas_stop = datetime.now(timezone.utc)
         db.commit()
 
-    # Jeśli nowy status to praca_normalna, znajdź ostatnie zlecenie
-    ostatnie_zlecenie = db.query(models.Obecnosc).filter(
-        models.Obecnosc.id_pracownika == id_pracownika,
-        models.Obecnosc.id_zlecenia != None
-    ).order_by(models.Obecnosc.czas_start.desc()).first()
-
-    if status == StatusObecnosciEnum.PRACA_NORMALNA and ostatnie_zlecenie:
+    # Jeśli nowy status to nie 'wyjscie_z_pracy', otwórz nowy
+    if nowy_status_val != StatusObecnosciEnum.WYJSCIE_Z_PRACY:
         nowy_status = models.Obecnosc(
             id_pracownika=id_pracownika,
-            czas_start=datetime.utcnow(),
-            status=status,
-            id_zlecenia=ostatnie_zlecenie.id_zlecenia
+            czas_start=datetime.now(timezone.utc),
+            status=nowy_status_val,
+            # Przenosimy id_zlecenia, jeśli pracownik wraca do pracy
+            id_zlecenia=ostatni_status.id_zlecenia if ostatni_status and nowy_status_val == StatusObecnosciEnum.PRACA else None
         )
+        db.add(nowy_status)
+        db.commit()
+        db.refresh(nowy_status)
+        return {"message": f"Zmieniono status na: {nowy_status_val.value}", "id_obecnosci": nowy_status.id_obecnosci}
     else:
-        nowy_status = models.Obecnosc(
-            id_pracownika=id_pracownika,
-            czas_start=datetime.utcnow(),
-            status=status
-        )
-    db.add(nowy_status)
-    db.commit()
-    db.refresh(nowy_status)
-
-    return {"message": f"Zmiana Statusu na {status.value}"}
-
+        return {"message": "Zakończono dzień pracy."}
 
 @app.get("/statusy")
 def lista_statusow():
@@ -449,24 +447,72 @@ def historia_pracownika(id_pracownika: int, db: Session = Depends(get_db)):
 def wybor_zlecenia(id_pracownika: int, id_zlecenia: int, db: Session = Depends(get_db)):
     """
     Pracownik wybiera zlecenie produkcyjne.
-    Zapisz id_zlecenia jako informację dodatkową w obecności i ustaw status na praca_normalna.
+    Możliwe tylko, gdy pracownik ma status 'praca'.
     """
-    # Znajdź aktywną obecność pracownika
+    # Znajdź aktywną obecność pracownika ze statusem 'praca'
     obecnosc = db.query(models.Obecnosc).filter(
         models.Obecnosc.id_pracownika == id_pracownika,
-        models.Obecnosc.czas_stop == None
+        models.Obecnosc.czas_stop == None,
+        models.Obecnosc.status == StatusObecnosciEnum.PRACA
     ).first()
-    if not obecnosc:
-        return {"error": "Pracownik nie jest obecny w pracy"}
 
-    # Zapisz wybrane zlecenie jako informację dodatkową
-    obecnosc.id_zlecenia = id_zlecenia  # Dodaj pole id_zlecenia do modelu Obecnosc jeśli nie istnieje
-    obecnosc.status = StatusObecnosciEnum.PRACA_NORMALNA
+    if not obecnosc:
+        raise HTTPException(status_code=400, detail="Nie można wybrać zlecenia. Pracownik nie jest w trybie 'praca'.")
+
+    # Zapisz wybrane zlecenie
+    obecnosc.id_zlecenia = id_zlecenia
     db.commit()
     db.refresh(obecnosc)
 
     return {
-        "status": "praca_normalna",
+        "message": "Przypisano zlecenie do pracownika",
         "id_pracownika": id_pracownika,
         "id_zlecenia": id_zlecenia
     }
+
+class UserStatus(BaseModel):
+    imie: str
+    nazwisko: str
+    status: str
+    czas_trwania: str
+
+@app.get("/pracownicy/{id_pracownika}/moj-status", response_model=UserStatus)
+def moj_status(id_pracownika: int, db: Session = Depends(get_db)):
+    """
+    Zwraca aktualny status pracownika i czas jego trwania.
+    """
+    # Znajdź pracownika
+    pracownik = db.query(models.Pracownik).filter(models.Pracownik.id_pracownika == id_pracownika).first()
+    if not pracownik:
+        raise HTTPException(status_code=404, detail="Pracownik nie znaleziony.")
+
+    # Znajdź ostatni aktywny status
+    ostatni_status = (
+        db.query(models.Obecnosc)
+        .filter(models.Obecnosc.id_pracownika == id_pracownika, models.Obecnosc.czas_stop == None)
+        .order_by(models.Obecnosc.czas_start.desc())
+        .first()
+    )
+
+    if not ostatni_status:
+        # Jeśli nie ma aktywnego statusu, może pracownik jeszcze nie zaczął dnia
+        return UserStatus(
+            imie=pracownik.imie,
+            nazwisko=pracownik.nazwisko,
+            status="Brak aktywnego statusu",
+            czas_trwania="N/A"
+        )
+
+    # Oblicz czas trwania
+    czas_teraz = datetime.now(timezone.utc)
+    roznica = czas_teraz - ostatni_status.czas_start
+    godziny = int(roznica.total_seconds() // 3600)
+    minuty = int((roznica.total_seconds() % 3600) // 60)
+    czas_trwania_str = f"{godziny}h {minuty}m"
+
+    return UserStatus(
+        imie=pracownik.imie,
+        nazwisko=pracownik.nazwisko,
+        status=ostatni_status.status.value,
+        czas_trwania=czas_trwania_str
+    )
